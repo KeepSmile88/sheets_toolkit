@@ -2236,7 +2236,11 @@ class MergeUniqueWorker(QThread):
                 
                 # Check if it's an external URL
                 # format: https://docs.google.com/spreadsheets/d/{ID}/edit, Sheet1!A1:D
-                if "docs.google.com" in source:
+                from urllib.parse import urlparse
+                parsed_source = urlparse(source if '://' in source else 'http://' + source)
+                domain = parsed_source.netloc.lower()
+
+                if domain.endswith('docs.google.com') or domain.endswith('google.com'):
                     parts = source.split(",", 1)
                     if len(parts) != 2:
                         self.error.emit(f"数据源格式错误 (缺少逗号分隔): {source}")

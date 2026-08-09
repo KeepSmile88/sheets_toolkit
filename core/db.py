@@ -8,8 +8,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "sheets.db")
 
 def _hash_password(password: str) -> str:
-    """使用 SHA-256 对密码进行哈希加密"""
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    """使用 PBKDF2-HMAC-SHA256 对密码进行哈希加密"""
+    salt = os.urandom(16)
+    pwdhash = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 100000)
+    return "pbkdf2:sha256:100000$" + salt.hex() + "$" + pwdhash.hex()
 
 def init_db():
     """初始化数据库并设置默认管理员密码（如果不存在）"""
@@ -63,7 +65,22 @@ def verify_password(username: str, password: str) -> bool:
         
     if result and result[0]:
         stored_hash = result[0]
-        return _hash_password(password) == stored_hash
+        if stored_hash.startswith("pbkdf2:sha256:"):
+            try:
+                parts = stored_hash.split("$")
+                salt = bytes.fromhex(parts[1])
+                hash_val = parts[2]
+                pwdhash = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 100000)
+                return pwdhash.hex() == hash_val
+            except Exception:
+                return False
+        else:
+            # 兼容老的 SHA-256
+            is_valid = hashlib.sha256(password.encode("utf-8")).hexdigest() == stored_hash
+            if is_valid:
+                # 自动升级密码哈希
+                update_password(username, password)
+            return is_valid
     # 如果该用户本来就没有密码，输入为空则算正确
     return not password
 

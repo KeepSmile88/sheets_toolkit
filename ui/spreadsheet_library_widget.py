@@ -755,14 +755,18 @@ class AccountPanel(QWidget):
                         folder_path = '->'.join(self.folder_stack) if self.folder_stack else ''
                         sid = ""
 
+                        from urllib.parse import urlparse
+                        parsed_href = urlparse(href if '://' in href else 'http://' + href)
+                        domain = parsed_href.netloc.lower()
+
                         # 1. Google Docs / Sheets / Slides (提取文件 ID)
-                        if 'google.com' in href:
+                        if domain.endswith('google.com') or domain.endswith('google.com.hk'):
                             sid_match = _re.search(r'/d/([a-zA-Z0-9_-]+)', href)
                             if sid_match:
                                 sid = sid_match.group(1)
 
                         # 2. YouTube (提取视频 ID)
-                        elif '://youtube.com' in href or 'youtu.be/' in href:
+                        elif domain.endswith('youtube.com') or domain == 'youtu.be':
                             v_match = _re.search(r'(?:v=|\/)([a-zA-Z0-9_-]{11})', href)
                             if v_match:
                                 sid = v_match.group(1)
