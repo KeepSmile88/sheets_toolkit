@@ -32,6 +32,10 @@ jobs:
         run: |
           pyinstaller --name=SheetsToolkit --noconfirm --clean --windowed --icon=resources/main.ico --add-data="resources;resources" main.py
 
+      - name: Copy resources to root directory
+        run: |
+          Copy-Item -Path resources -Destination dist\SheetsToolkit\resources -Recurse
+
       - name: Compile Inno Setup Installer
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" windows_setup.iss
