@@ -761,13 +761,14 @@ class AccountPanel(QWidget):
 
                         # 1. Google Docs / Sheets / Slides (提取文件 ID)
                         is_google = domain == 'google.com' or domain.endswith('.google.com') or domain == 'google.com.hk' or domain.endswith('.google.com.hk')
+                        is_youtube = domain == 'youtube.com' or domain.endswith('.youtube.com') or domain == 'youtu.be'
+                        
                         if is_google:
                             sid_match = _re.search(r'/d/([a-zA-Z0-9_-]+)', href)
                             if sid_match:
                                 sid = sid_match.group(1)
 
                         # 2. YouTube (提取视频 ID)
-                        is_youtube = domain == 'youtube.com' or domain.endswith('.youtube.com') or domain == 'youtu.be'
                         elif is_youtube:
                             v_match = _re.search(r'(?:v=|\/)([a-zA-Z0-9_-]{11})', href)
                             if v_match:
