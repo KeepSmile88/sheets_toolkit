@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+*.txt
+*.md
+
+ui/__pycache__/
+services/__pycache__/
+modules/__pycache__/
+core/__pycache__/
+
+# 认证敏感文件
+token.pickle
+token.json
+credentials.json
+
+*.enc
+*.sheet_lib_key
+config.json
+*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 备份目录
+backups/
+
+# 日志
+logs/
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.db
+!README.md

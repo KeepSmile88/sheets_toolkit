@@ -1,0 +1,126 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nuitka zstandard
+
+      - name: Build Main App with Nuitka
+        run: |
+          python -m nuitka --assume-yes-for-downloads --standalone --windows-console-mode=disable --windows-icon-from-ico=resources/main.ico --enable-plugin=pyside6 --include-data-dir=resources=resources --include-data-file=config.json=config.json --output-filename=SheetsToolkit.exe --output-dir=dist main.py
+
+      - name: Prepare Inno Setup Directory
+        run: |
+          Rename-Item -Path dist\main.dist -NewName SheetsToolkit
+
+      - name: Compile Inno Setup Installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" windows_setup.iss
+
+      - name: Attest Windows Installer
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/SheetsToolkit-Windows-Setup.exe'
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SheetsToolkit-Windows
+          path: dist/SheetsToolkit-Windows-Setup.exe
+
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nuitka zstandard
+
+      - name: Build Main App with Nuitka
+        run: |
+          python -m nuitka --assume-yes-for-downloads --standalone --macos-create-app-bundle --macos-app-icon=resources/main.png --enable-plugin=pyside6 --include-data-dir=resources=resources --include-data-file=config.json=config.json --output-filename=SheetsToolkit --output-dir=dist main.py
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        run: |
+          create-dmg \
+            --volname "SheetsToolkit" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "SheetsToolkit.app" 200 190 \
+            --hide-extension "SheetsToolkit.app" \
+            --app-drop-link 600 185 \
+            "SheetsToolkit-macOS-arm64.dmg" \
+            "dist/SheetsToolkit.app" || true
+          
+          if [ ! -f "SheetsToolkit-macOS-arm64.dmg" ]; then
+            echo "DMG creation failed!"
+            exit 1
+          fi
+
+      - name: Attest macOS DMG
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "SheetsToolkit-macOS-arm64.dmg"
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SheetsToolkit-macOS-arm64
+          path: "SheetsToolkit-macOS-arm64.dmg"
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
