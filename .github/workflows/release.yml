@@ -30,7 +30,7 @@ jobs:
 
       - name: Build Main App with Nuitka
         run: |
-          python -m nuitka --assume-yes-for-downloads --standalone --windows-console-mode=disable --windows-icon-from-ico=resources/main.ico --enable-plugin=pyside6 --include-data-dir=resources=resources --include-data-file=config.json=config.json --output-filename=SheetsToolkit.exe --output-dir=dist main.py
+          python -m nuitka --assume-yes-for-downloads --standalone --windows-console-mode=disable --windows-icon-from-ico=resources/main.ico --enable-plugin=pyside6 --include-data-dir=resources=resources --output-filename=SheetsToolkit.exe --output-dir=dist main.py
 
       - name: Prepare Inno Setup Directory
         run: |
@@ -74,7 +74,7 @@ jobs:
 
       - name: Build Main App with Nuitka
         run: |
-          python -m nuitka --assume-yes-for-downloads --standalone --macos-create-app-bundle --macos-app-icon=resources/main.png --enable-plugin=pyside6 --include-data-dir=resources=resources --include-data-file=config.json=config.json --output-filename=SheetsToolkit --output-dir=dist main.py
+          python -m nuitka --assume-yes-for-downloads --standalone --macos-create-app-bundle --macos-app-icon=resources/main.png --enable-plugin=pyside6 --include-data-dir=resources=resources --output-filename=SheetsToolkit --output-dir=dist main.py
 
       - name: Install create-dmg
         run: brew install create-dmg
