@@ -26,15 +26,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install nuitka zstandard
+          pip install pyinstaller pillow
 
-      - name: Build Main App with Nuitka
+      - name: Build Main App with PyInstaller
         run: |
-          python -m nuitka --assume-yes-for-downloads --standalone --windows-console-mode=disable --windows-icon-from-ico=resources/main.ico --enable-plugin=pyside6 --include-data-dir=resources=resources --output-filename=SheetsToolkit.exe --output-dir=dist main.py
-
-      - name: Prepare Inno Setup Directory
-        run: |
-          Rename-Item -Path dist\main.dist -NewName SheetsToolkit
+          pyinstaller --name=SheetsToolkit --noconfirm --clean --windowed --icon=resources/main.ico --add-data="resources;resources" main.py
 
       - name: Compile Inno Setup Installer
         run: |
