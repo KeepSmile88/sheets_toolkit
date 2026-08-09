@@ -1,0 +1,5 @@
+PySide6>=6.5
+google-api-python-client>=2.91
+google-auth>=2.23
+google-auth-oauthlib>=1.1
+apscheduler>=3.10
