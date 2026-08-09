@@ -72,9 +72,11 @@ jobs:
           pip install -r requirements.txt
           pip install nuitka zstandard
 
-      - name: Build Main App with Nuitka
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+      - name: Build Main App with PyInstaller
         run: |
-          python -m nuitka --assume-yes-for-downloads --standalone --macos-create-app-bundle --macos-app-icon=resources/main.png --enable-plugin=pyside6 --include-data-dir=resources=resources --output-filename=SheetsToolkit --output-dir=dist main.py
+          pyinstaller --name=SheetsToolkit --noconfirm --clean --windowed --icon=resources/main.png --add-data="resources:resources" main.py
 
       - name: Install create-dmg
         run: brew install create-dmg
