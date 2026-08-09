@@ -74,13 +74,7 @@ def verify_password(username: str, password: str) -> bool:
                 return pwdhash.hex() == hash_val
             except Exception:
                 return False
-        else:
-            # 兼容老的 SHA-256
-            is_valid = hashlib.sha256(password.encode("utf-8")).hexdigest() == stored_hash
-            if is_valid:
-                # 自动升级密码哈希
-                update_password(username, password)
-            return is_valid
+        return False
     # 如果该用户本来就没有密码，输入为空则算正确
     return not password
 

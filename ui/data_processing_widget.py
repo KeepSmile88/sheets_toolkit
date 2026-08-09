@@ -2239,8 +2239,10 @@ class MergeUniqueWorker(QThread):
                 from urllib.parse import urlparse
                 parsed_source = urlparse(source if '://' in source else 'http://' + source)
                 domain = parsed_source.netloc.lower()
+                
+                is_google = domain == 'docs.google.com' or domain.endswith('.docs.google.com') or domain == 'google.com' or domain.endswith('.google.com')
 
-                if domain.endswith('docs.google.com') or domain.endswith('google.com'):
+                if is_google:
                     parts = source.split(",", 1)
                     if len(parts) != 2:
                         self.error.emit(f"数据源格式错误 (缺少逗号分隔): {source}")
