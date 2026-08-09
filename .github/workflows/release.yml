@@ -73,10 +73,12 @@ jobs:
           pip install nuitka zstandard
 
       - name: Install PyInstaller
-        run: pip install pyinstaller
+        run: pip install pyinstaller pillow
+      - name: Convert Icon to ICNS
+        run: sips -s format icns resources/main.png --out resources/main.icns
       - name: Build Main App with PyInstaller
         run: |
-          pyinstaller --name=SheetsToolkit --noconfirm --clean --windowed --icon=resources/main.png --add-data="resources:resources" main.py
+          pyinstaller --name=SheetsToolkit --noconfirm --clean --windowed --icon=resources/main.icns --add-data="resources:resources" main.py
 
       - name: Install create-dmg
         run: brew install create-dmg
