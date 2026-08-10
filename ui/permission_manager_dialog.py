@@ -112,7 +112,7 @@ class PermissionActionWorker(QThread):
             
             # 处理递归展开
             actual_sids = set()
-            if self.kwargs.get("recursive", False):
+            if self.kwargs.get("recursive_down", False):
                 for sid in self.spreadsheet_ids:
                     actual_sids.add(sid)
                     try:
@@ -145,18 +145,19 @@ class PermissionActionWorker(QThread):
                             self.kwargs["role"]
                         )
                     elif self.action == "set_secure":
-                        # 核心控制：是否禁止只读用户复制/下载
                         service.set_copy_requires_writer_permission(self.kwargs.get("enable", True))
                     elif self.action == "set_owners_only":
-                        # 核心控制：是否禁止编辑者参与分享授权 (独占所有权)
                         service.set_writers_can_share_permission(not self.kwargs.get("enable", True))
                     elif self.action == "remove_all_secure":
-                        # 一键解锁两项高级策略
                         service.set_copy_requires_writer_permission(False)
                         service.set_writers_can_share_permission(True)
                     elif self.action == "remove_all_permissions":
-                        # 移除所有人的权限
-                        service.remove_all_permissions()
+                        service.remove_all_permissions(recursive=self.kwargs.get("recursive_up", False))
+                    elif self.action == "sync_permissions":
+                        emails = [e.strip() for e in self.kwargs["email"].split(",") if e.strip()]
+                        service.sync_permissions(emails, self.kwargs.get("role", "writer"), recursive_remove=self.kwargs.get("recursive_up", False))
+                    elif self.action == "remove_anyone_permission":
+                        service.remove_anyone_permission()
                     success += 1
                 except Exception as e:
                     logger.error(f"权限操作失败 [{sid}]: {e}")
@@ -246,6 +247,13 @@ class PermissionManagerDialog(QDialog):
         self.add_btn = QPushButton("➕ 添加协作者")
         self.add_btn.clicked.connect(self._add_collaborator)
         add_row.addWidget(self.add_btn)
+        
+        self.sync_btn = QPushButton("🔄 一键同步权限")
+        self.sync_btn.setStyleSheet("background-color: #f39c12; color: white;")
+        self.sync_btn.setToolTip("将选中表格的权限完全替换为上述输入框中的邮箱，并统一设置为左侧选定的角色。")
+        self.sync_btn.clicked.connect(self._sync_permissions)
+        add_row.addWidget(self.sync_btn)
+        
         ol.addLayout(add_row)
 
         # 修改/移除
@@ -261,6 +269,10 @@ class PermissionManagerDialog(QDialog):
         action_row.addWidget(self.update_btn)
 
         action_row.addStretch()
+        
+        self.remove_parent_recursive_check = QCheckBox("同时从父文件夹中移除该用户的访问权 (高危)")
+        self.remove_parent_recursive_check.setStyleSheet("color: red; font-weight: bold;")
+        action_row.addWidget(self.remove_parent_recursive_check)
 
         self.remove_btn = QPushButton("🗑 移除选中")
         self.remove_btn.setObjectName("danger_btn")
@@ -276,6 +288,11 @@ class PermissionManagerDialog(QDialog):
         self.remove_all_btn.setStyleSheet("background-color: #d32f2f; color: white;")
         self.remove_all_btn.clicked.connect(self._remove_all_permissions)
         action_row.addWidget(self.remove_all_btn)
+
+        self.remove_anyone_btn = QPushButton("🚫 取消公开访问 (转受限)")
+        self.remove_anyone_btn.setStyleSheet("background-color: #795548; color: white;")
+        self.remove_anyone_btn.clicked.connect(self._remove_anyone_permission)
+        action_row.addWidget(self.remove_anyone_btn)
 
         self.refresh_btn = QPushButton("🔄 刷新")
         self.refresh_btn.clicked.connect(self._start_fetch)
@@ -453,7 +470,7 @@ class PermissionManagerDialog(QDialog):
             self.status_label.setText("⚠️ 没有可操作的表格")
             return
 
-        self._run_action("add", sids, email=email, role=role, recursive=self.apply_recursive_check.isChecked())
+        self._run_action("add", sids, email=email, role=role, recursive_down=self.apply_recursive_check.isChecked())
 
     def _update_selected_role(self):
         """修改选中协作者的角色"""
@@ -523,7 +540,7 @@ class PermissionManagerDialog(QDialog):
         ) != QMessageBox.Yes:
             return
 
-        self._run_action("set_secure", sids, enable=enable, recursive=self.apply_recursive_check.isChecked())
+        self._run_action("set_secure", sids, enable=enable, recursive_down=self.apply_recursive_check.isChecked())
 
     def _set_owner_only_mode(self, enable):
         """开启或关闭所有者独占分享权"""
@@ -545,7 +562,7 @@ class PermissionManagerDialog(QDialog):
         ) != QMessageBox.Yes:
             return
 
-        self._run_action("set_owners_only", sids, enable=enable, recursive=self.apply_recursive_check.isChecked())
+        self._run_action("set_owners_only", sids, enable=enable, recursive_down=self.apply_recursive_check.isChecked())
 
     def _remove_all_permissions(self):
         """一键移除选中表格或当前所有表格的所有协作者（保留所有者）"""
@@ -566,7 +583,7 @@ class PermissionManagerDialog(QDialog):
         ) != QMessageBox.Yes:
             return
 
-        self._run_action("remove_all_permissions", sids, recursive=self.apply_recursive_check.isChecked())
+        self._run_action("remove_all_permissions", sids, recursive_down=self.apply_recursive_check.isChecked(), recursive_up=self.remove_parent_recursive_check.isChecked())
 
     def _remove_all_secure_modes(self):
         """一键解除所有由高阶安全模式引发的限制"""
@@ -579,6 +596,54 @@ class PermissionManagerDialog(QDialog):
         if not sids:
             return
             
+    def _sync_permissions(self):
+        """一键同步权限：用输入的邮箱完全替换现有的权限"""
+        emails_str = self.email_input.text().strip()
+        if not emails_str:
+            self.status_label.setText("⚠️ 请输入要同步保留/添加的协作者邮箱")
+            return
+        
+        role = self.role_combo.currentText()
+        selected = self._get_selected_permission_rows()
+        if not selected:
+            sids = list(set([e.get("spreadsheet_id", "") for e in self.entries if e.get("spreadsheet_id")]))
+        else:
+            sids = list(set(r["sid"] for r in selected if r["sid"]))
+            
+        if not sids:
+            self.status_label.setText("⚠️ 没有选定可操作的表格")
+            return
+            
+        if QMessageBox.question(
+            self, "一键同步确认",
+            f"确定要将 {len(sids)} 个表格的权限同步为如下邮箱吗？\n{emails_str}\n\n注意：这会赋予上述邮箱 {role} 角色，同时移除其他所有协作者（保留所有者）。此操作不可撤销！",
+            QMessageBox.Yes | QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+
+        self._run_action("sync_permissions", sids, email=emails_str, role=role, recursive_down=self.apply_recursive_check.isChecked(), recursive_up=self.remove_parent_recursive_check.isChecked())
+
+    def _remove_anyone_permission(self):
+        """取消公开访问权限 (知道链接的任何人)"""
+        selected = self._get_selected_permission_rows()
+        if not selected:
+            sids = list(set([e.get("spreadsheet_id", "") for e in self.entries if e.get("spreadsheet_id")]))
+        else:
+            sids = list(set(r["sid"] for r in selected if r["sid"]))
+            
+        if not sids:
+            self.status_label.setText("⚠️ 没有选定可操作的表格")
+            return
+            
+        if QMessageBox.question(
+            self, "取消公开访问确认",
+            f"确定要将这 {len(sids)} 个表格的“知道链接的任何人”权限取消吗？\n取消后，仅受邀用户才可访问。",
+            QMessageBox.Yes | QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+
+        self._run_action("remove_anyone_permission", sids, recursive_down=self.apply_recursive_check.isChecked())
+            
         if QMessageBox.question(
             self, "解除高级锁定",
             "确定要解除选中表格的所有高级安全封锁吗？\n（包括恢复只读用户的复制/下载权，以及恢复编辑者的全权分享权）",
@@ -589,7 +654,7 @@ class PermissionManagerDialog(QDialog):
         # 这里用一个小 Trick 连续触发两次解绑动作：因 action 采用单线程串联，需组合发送或分开执行。
         # 为了简洁交互，我们先执行解除复制限制，用户可以看提示后再点其他。
         # 但既然后台支持通过 Worker 进行队列或者覆盖调用，我们采用直接修改 Worker 逻辑：
-        self._action_worker = PermissionActionWorker("remove_all_secure", sids, recursive=self.apply_recursive_check.isChecked())
+        self._action_worker = PermissionActionWorker("remove_all_secure", sids, recursive_down=self.apply_recursive_check.isChecked())
         self.progress.setVisible(True)
         self.progress.setMaximum(len(sids))
         self.status_label.setText("⏳ 正在解除全部锁定...")
@@ -619,7 +684,12 @@ class PermissionManagerDialog(QDialog):
                 if action == "update":
                     service.update_permission(item["permission_id"], kwargs["role"])
                 elif action == "remove":
-                    service.remove_permission(item["permission_id"])
+                    # 调用递归移除逻辑，传入当前的 checkbox 状态
+                    service.remove_permission(
+                        permission_id=item["permission_id"], 
+                        recursive=self.remove_parent_recursive_check.isChecked(),
+                        email=item["email"]
+                    )
                 elif action == "accept_ownership":
                     service.accept_ownership(item["permission_id"])
                 success += 1

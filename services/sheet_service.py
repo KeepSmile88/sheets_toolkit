@@ -1063,21 +1063,146 @@ class SheetService:
         logger.info(f"成功将工作簿 {self.spreadsheet_id} 分享权限制修改为: {status}")
         return res
 
+    def remove_permission_recursively(self, file_id, email):
+        """
+        递归向上移除父级目录中的权限。
+        """
+        from googleapiclient.errors import HttpError
+        try:
+            file_meta = self.drive_api.files().get(fileId=file_id, fields="parents").execute()
+            parents = file_meta.get("parents", [])
+        except HttpError:
+            parents = []
+
+        for parent_id in parents:
+            try:
+                perms_res = self.drive_api.permissions().list(
+                    fileId=parent_id,
+                    fields="permissions(id,emailAddress,type)"
+                ).execute()
+                
+                for p in perms_res.get("permissions", []):
+                    if p.get("type") == "user" and p.get("emailAddress", "").lower() == email.lower():
+                        try:
+                            self.drive_api.permissions().delete(
+                                fileId=parent_id, permissionId=p["id"]
+                            ).execute()
+                            logger.info(f"已在父级 {parent_id} 中移除 {email} 的权限")
+                        except HttpError as e:
+                            if 'cannotDeletePermission' in str(e):
+                                self.remove_permission_recursively(parent_id, email)
+                            else:
+                                raise
+                        break
+                else:
+                    self.remove_permission_recursively(parent_id, email)
+            except Exception as e:
+                logger.warning(f"递归检查父级 {parent_id} 时出错: {e}")
+
     @retry_on_api_error()
-    def remove_all_permissions(self):
+    def remove_all_permissions(self, recursive=False):
         """回收所有协作者权限（保留 owner）"""
         perms = self.drive_api.permissions().list(
-            fileId=self.spreadsheet_id
+            fileId=self.spreadsheet_id,
+            fields="permissions(id,emailAddress,role,type)"
         ).execute().get("permissions", [])
         removed = 0
+        from googleapiclient.errors import HttpError
         for p in perms:
             if p["role"] != "owner":
-                self.drive_api.permissions().delete(
-                    fileId=self.spreadsheet_id, permissionId=p["id"]
-                ).execute()
-                removed += 1
+                try:
+                    self.drive_api.permissions().delete(
+                        fileId=self.spreadsheet_id, permissionId=p["id"]
+                    ).execute()
+                    removed += 1
+                except HttpError as e:
+                    if 'cannotDeletePermission' in str(e):
+                        if recursive and p.get("type") == "user" and p.get("emailAddress"):
+                            email = p["emailAddress"]
+                            logger.info(f"权限 {email} 继承自父级，开始递归清理...")
+                            self.remove_permission_recursively(self.spreadsheet_id, email)
+                            try:
+                                self.drive_api.permissions().delete(
+                                    fileId=self.spreadsheet_id, permissionId=p["id"]
+                                ).execute()
+                                removed += 1
+                            except HttpError:
+                                pass
+                        else:
+                            logger.warning(f"跳过删除继承的权限: {p.get('emailAddress', p['id'])}")
+                        continue
+                    raise
         logger.info(f"已回收 {removed} 个协作者权限")
         return removed
+
+    @retry_on_api_error()
+    def remove_anyone_permission(self):
+        """取消公开链接访问（Anyone 转受限）"""
+        perms = self.drive_api.permissions().list(
+            fileId=self.spreadsheet_id,
+            fields="permissions(id,type)"
+        ).execute().get("permissions", [])
+        removed = 0
+        from googleapiclient.errors import HttpError
+        for p in perms:
+            if p.get("type") == "anyone":
+                try:
+                    self.drive_api.permissions().delete(
+                        fileId=self.spreadsheet_id, permissionId=p["id"]
+                    ).execute()
+                    removed += 1
+                except HttpError as e:
+                    logger.warning(f"删除 anyone 权限失败: {e}")
+        logger.info(f"已移除 {removed} 个 anyone 权限，转为受限访问")
+        return removed
+
+    @retry_on_api_error()
+    def sync_permissions(self, target_emails, role="writer", recursive_remove=False):
+        """一键同步权限"""
+        perms = self.drive_api.permissions().list(
+            fileId=self.spreadsheet_id,
+            fields="permissions(id,emailAddress,role,type)"
+        ).execute().get("permissions", [])
+        
+        target_emails_lower = {e.lower().strip() for e in target_emails if e.strip()}
+        existing_emails_lower = set()
+        
+        from googleapiclient.errors import HttpError
+        for p in perms:
+            email = p.get("emailAddress", "").lower()
+            if p["role"] == "owner":
+                if email:
+                    existing_emails_lower.add(email)
+                continue
+                
+            if p.get("type") == "user" and email:
+                if email not in target_emails_lower:
+                    try:
+                        self.drive_api.permissions().delete(
+                            fileId=self.spreadsheet_id, permissionId=p["id"]
+                        ).execute()
+                    except HttpError as e:
+                        if 'cannotDeletePermission' in str(e):
+                            if recursive_remove:
+                                self.remove_permission_recursively(self.spreadsheet_id, email)
+                                try:
+                                    self.drive_api.permissions().delete(
+                                        fileId=self.spreadsheet_id, permissionId=p["id"]
+                                    ).execute()
+                                except HttpError:
+                                    pass
+                            else:
+                                logger.warning(f"跳过删除继承的权限: {email}")
+                        else:
+                            raise
+                else:
+                    existing_emails_lower.add(email)
+                    
+        for email in target_emails_lower:
+            if email not in existing_emails_lower:
+                self.set_permission(email, role)
+                
+        logger.info(f"一键同步权限完成，目标 {len(target_emails_lower)} 个用户")
 
     @retry_on_api_error()
     def list_permissions(self):
@@ -1114,18 +1239,38 @@ class SheetService:
         return result
 
     @retry_on_api_error()
-    def remove_permission(self, permission_id):
+    def remove_permission(self, permission_id, recursive=False, email=None):
         """
         移除指定的协作者权限。
-
+        
         Args:
             permission_id: 权限 ID
+            recursive: 是否递归清理继承的权限
+            email: 目标邮箱（用于递归清理）
         """
-        self.drive_api.permissions().delete(
-            fileId=self.spreadsheet_id,
-            permissionId=permission_id
-        ).execute()
-        logger.info(f"已移除权限: {permission_id}")
+        from googleapiclient.errors import HttpError
+        try:
+            self.drive_api.permissions().delete(
+                fileId=self.spreadsheet_id,
+                permissionId=permission_id
+            ).execute()
+            logger.info(f"已移除权限: {permission_id}")
+        except HttpError as e:
+            if 'cannotDeletePermission' in str(e):
+                if recursive and email:
+                    logger.info(f"权限继承自父级，开始递归清理...")
+                    self.remove_permission_recursively(self.spreadsheet_id, email)
+                    try:
+                        self.drive_api.permissions().delete(
+                            fileId=self.spreadsheet_id, permissionId=permission_id
+                        ).execute()
+                    except HttpError:
+                        pass
+                else:
+                    logger.warning(f"无法直接删除继承的权限: {permission_id}")
+                    raise ValidationError("无法直接删除此权限，因为它是从上级文件夹继承的。请前往 Google Drive 在父级文件夹中进行修改，或勾选「同时从父文件夹中移除该用户的访问权」。")
+            else:
+                raise
 
     @retry_on_api_error()
     def update_permission(self, permission_id, role):
@@ -1675,7 +1820,7 @@ class SheetService:
     # ========================
 
     @staticmethod
-    def list_folder_files(folder_id, check_cancelled=None):
+    def list_folder_files(folder_id, check_cancelled=None, supported_mime_types=None):
         """
         列出 Google Drive 文件夹下的所有文件。
 
@@ -1703,8 +1848,18 @@ class SheetService:
             if check_cancelled and check_cancelled():
                 break
 
+            q_val = f"'{folder_id}' in parents and trashed = false"
+            if supported_mime_types:
+                conds = []
+                for m in supported_mime_types:
+                    if m.endswith('/'):
+                        conds.append(f"mimeType contains '{m}'")
+                    else:
+                        conds.append(f"mimeType='{m}'")
+                mime_cond = " or ".join(conds)
+                q_val += f" and ({mime_cond})"
             resp = drive.files().list(
-                q=f"'{folder_id}' in parents and trashed = false",
+                q=q_val,
                 fields="nextPageToken, files(id, name, mimeType, webViewLink, "
                        "modifiedTime, size, ownedByMe, permissions(id, emailAddress, role, "
                        "displayName, type, pendingOwner))",
@@ -1774,9 +1929,9 @@ class SheetService:
         return list(set(all_file_ids))
 
     @staticmethod
-    def list_all_spreadsheets_with_path(folder_id, progress_callback=None, include_shared=True, check_cancelled=None):
+    def list_all_files_with_path(folder_id, progress_callback=None, include_shared=True, check_cancelled=None, supported_mime_types=None):
         """
-        递归获取文件夹下的所有 Google Sheets，并包含相对路径。
+        递归获取文件夹下的所有 Google Drive 文件，并包含相对路径。
         若 folder_id 为 "root"，则进行全局检索（包含 Shared with me, Shared Drives）。
         """
         from core.auth import AuthManager
@@ -1833,16 +1988,28 @@ class SheetService:
 
             page_token = None
             processed_count = 0
-            q_spreadsheet = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+            q_file = "trashed=false"
+            if supported_mime_types:
+                conds = []
+                for m in supported_mime_types:
+                    if m.endswith('/'):
+                        conds.append(f"mimeType contains '{m}'")
+                    else:
+                        conds.append(f"mimeType='{m}'")
+                mime_cond = " or ".join(conds)
+                q_file += f" and ({mime_cond})"
+            else:
+                q_file += " and mimeType!='application/vnd.google-apps.folder'"
+                
             if not include_shared:
-                q_spreadsheet += " and 'me' in owners"
+                q_file += " and 'me' in owners"
                 
             while True:
                 if check_cancelled and check_cancelled():
                     break
                 try:
                     resp = drive.files().list(
-                        q=q_spreadsheet,
+                        q=q_file,
                         fields="nextPageToken, files(id, name, mimeType, webViewLink, modifiedTime, size, ownedByMe, parents, permissions(id, emailAddress, role, displayName, type, pendingOwner))",
                         pageSize=1000,
                         pageToken=page_token,
@@ -1856,13 +2023,13 @@ class SheetService:
                         processed_count += 1
 
                     if progress_callback and processed_count % 100 == 0:
-                        progress_callback(f"已获取 {processed_count} 个表格...")
+                        progress_callback(f"已获取 {processed_count} 个文件...")
 
                     page_token = resp.get("nextPageToken")
                     if not page_token:
                         break
                 except Exception as e:
-                    logger.error(f"全局获取表格失败: {e}")
+                    logger.error(f"全局获取文件失败: {e}")
                     break
             
             logger.info(f"获取文件夹 {folder_id} 下 {len(all_spreadsheets)} 个文件")
@@ -1897,12 +2064,25 @@ class SheetService:
                             
                             if mime_type == "application/vnd.google-apps.folder":
                                 folders_to_process.append((file.get("id"), f"{current_path}{file_name}/"))
-                            elif mime_type == "application/vnd.google-apps.spreadsheet":
-                                file["path"] = current_path
-                                all_spreadsheets.append(file)
-                                processed_count += 1
-                                if progress_callback:
-                                    progress_callback(f"已找到 {processed_count} 个表格: {current_path}{file_name}")
+                            else:
+                                is_match = False
+                                if not supported_mime_types:
+                                    is_match = True
+                                else:
+                                    for m in supported_mime_types:
+                                        if m.endswith('/') and mime_type and mime_type.startswith(m):
+                                            is_match = True
+                                            break
+                                        elif mime_type == m:
+                                            is_match = True
+                                            break
+                                            
+                                if is_match:
+                                    file["path"] = current_path
+                                    all_spreadsheets.append(file)
+                                    processed_count += 1
+                                    if progress_callback:
+                                        progress_callback(f"已找到 {processed_count} 个文件: {current_path}{file_name}")
 
                         page_token = resp.get("nextPageToken")
                         if not page_token:

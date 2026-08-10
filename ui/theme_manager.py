@@ -58,6 +58,7 @@ QLabel#section_title {
     font-weight: bold;
     color: #2e7d32;
     padding: 8px 0;
+    max-height: 35px;
 }
 
 /* 按钮 */
@@ -338,6 +339,7 @@ QLabel#section_title {
     font-weight: bold;
     color: #a6e3a1;
     padding: 8px 0;
+    max-height: 35px;
 }
 
 QPushButton {

@@ -184,29 +184,34 @@ class MainWindow(QMainWindow):
         from core.logger import get_log_emitter
         get_log_emitter().log_signal.connect(self.log)
 
-        # 参数面板
-        form = QVBoxLayout()
-        form.setSpacing(6)
+        # 参数面板 (改为横向 Toolbar 风格，节省左侧空间)
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setSpacing(10)
+        toolbar_layout.setContentsMargins(10, 5, 10, 5)
 
-        form.addWidget(QLabel("📄 Google Sheet ID"))
-        form.addWidget(self.input_id)
+        toolbar_layout.addWidget(QLabel("📄 ID:"))
+        self.input_id.setMinimumWidth(180)
+        toolbar_layout.addWidget(self.input_id)
 
         connect_btn = QPushButton("🔗 连接")
         connect_btn.clicked.connect(self.connect_sheet)
-        form.addWidget(connect_btn)
+        toolbar_layout.addWidget(connect_btn)
 
-        form.addWidget(QLabel("📋 工作表"))
-        form.addWidget(self.sheet_list)
-        form.addWidget(QLabel("📍 区域范围"))
-        form.addWidget(self.range_input)
-        form.addWidget(QLabel("🔍 搜索关键词"))
-        form.addWidget(self.keyword_input)
-        form.addStretch()
+        toolbar_layout.addWidget(QLabel("📋 表:"))
+        self.sheet_list.setMinimumWidth(120)
+        toolbar_layout.addWidget(self.sheet_list)
+        
+        toolbar_layout.addWidget(QLabel("📍 范围:"))
+        self.range_input.setMaximumWidth(80)
+        toolbar_layout.addWidget(self.range_input)
+        
+        toolbar_layout.addWidget(QLabel("🔍 搜索:"))
+        toolbar_layout.addWidget(self.keyword_input)
+        toolbar_layout.addStretch()
 
-        sidebar = QWidget()
-        sidebar.setLayout(form)
-        sidebar.setMaximumWidth(260)
-        sidebar.setMinimumWidth(200)
+        toolbar_widget = QWidget()
+        toolbar_widget.setLayout(toolbar_layout)
+        toolbar_widget.setMaximumHeight(50)
 
         # 左侧导航菜单与页面映射
         pages = [
@@ -251,8 +256,8 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(func())
             self.page_mapping.append(i)
 
-        self.menu.setMaximumWidth(150)
         self.menu.setMinimumWidth(130)
+        self.menu.setMaximumWidth(280)
         self.menu.setSpacing(4)
         
         def on_page_switch(index):
@@ -275,16 +280,22 @@ class MainWindow(QMainWindow):
         self.stack.setMinimumHeight(300)
 
         # 中间内容区：导航 + 功能
-        content = QSplitter()
+        content = QSplitter(Qt.Horizontal)
         content.addWidget(self.menu)
         content.addWidget(right_split)
+        content.setStretchFactor(0, 0)
+        content.setStretchFactor(1, 1)
+        content.setSizes([140, 800])
 
-        # 总布局：参数区 + 内容区
-        final_layout = QSplitter()
-        final_layout.addWidget(sidebar)
+        # 总布局：顶部工具栏 + 下方内容区
+        final_layout = QVBoxLayout()
+        final_layout.setContentsMargins(0, 0, 0, 0)
+        final_layout.addWidget(toolbar_widget)
         final_layout.addWidget(content)
 
-        self.setCentralWidget(final_layout)
+        central_widget = QWidget()
+        central_widget.setLayout(final_layout)
+        self.setCentralWidget(central_widget)
         self.menu.setCurrentRow(0)
 
     # ========================

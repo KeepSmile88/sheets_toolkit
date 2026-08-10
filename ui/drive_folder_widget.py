@@ -187,28 +187,31 @@ class DriveFolderFetchWorker(QThread):
     finished = Signal(str, list)  # (folder_id, 文件列表)
     error = Signal(str)
 
-    def __init__(self, folder_id, recursive=False, include_shared=True):
+    def __init__(self, folder_id, recursive=False, include_shared=True, supported_mime_types=None):
         super().__init__()
         self.folder_id = folder_id
         self.recursive = recursive
         self.include_shared = include_shared
+        self.supported_mime_types = supported_mime_types
 
     def run(self):
         try:
             from services.sheet_service import SheetService
             if self.recursive:
                 self.progress.emit("⏳ 正在递归遍历所有子文件夹...")
-                files = SheetService.list_all_spreadsheets_with_path(
+                files = SheetService.list_all_files_with_path(
                     self.folder_id, 
                     self.progress.emit,
                     include_shared=self.include_shared,
-                    check_cancelled=self.isInterruptionRequested
+                    check_cancelled=self.isInterruptionRequested,
+                    supported_mime_types=self.supported_mime_types
                 )
             else:
                 self.progress.emit("⏳ 正在获取文件夹内容...")
                 files = SheetService.list_folder_files(
                     self.folder_id,
-                    check_cancelled=self.isInterruptionRequested
+                    check_cancelled=self.isInterruptionRequested,
+                    supported_mime_types=self.supported_mime_types
                 )
             if self.isInterruptionRequested():
                 self.error.emit("已取消加载")
@@ -279,6 +282,39 @@ class DriveFolderWidget(QWidget):
         self.include_shared_check.setChecked(True)
         self.include_shared_check.setToolTip("开启后，在使用根目录('/')全局检索时，包含别人分享给您的文件")
         input_row.addWidget(self.include_shared_check)
+        
+        # 文件类型过滤
+        self.mime_menu = QMenu(self)
+        self.mime_actions = {}
+        try:
+            from modules.mime import DRIVE_MIME_TYPES
+            mime_types = DRIVE_MIME_TYPES
+        except ImportError:
+            mime_types = {
+                "表格 (Sheets)": "application/vnd.google-apps.spreadsheet",
+                "文档 (Docs)": "application/vnd.google-apps.document",
+                "幻灯片 (Slides)": "application/vnd.google-apps.presentation",
+                "表单 (Forms)": "application/vnd.google-apps.form",
+                "PDF文件": "application/pdf",
+                "图片 (Image)": "image/",
+                "视频 (Video)": "video/"
+            }
+        
+        from PySide6.QtWidgets import QWidgetAction
+        for label, mime in mime_types.items():
+            action = QWidgetAction(self.mime_menu)
+            cb = QCheckBox(label)
+            cb.setStyleSheet("QCheckBox { padding: 4px 15px; margin: 2px 0px; } QCheckBox:hover { background-color: #f0f0f0; }")
+            if "spreadsheet" in mime:
+                cb.setChecked(True)
+            cb.setProperty("mime", mime)
+            action.setDefaultWidget(cb)
+            self.mime_menu.addAction(action)
+            self.mime_actions[label] = cb
+
+        self.mime_btn = QPushButton("📄 文件类型...")
+        self.mime_btn.setMenu(self.mime_menu)
+        input_row.addWidget(self.mime_btn)
 
         self.refresh_btn = QPushButton("🔄 刷新")
         self.refresh_btn.clicked.connect(self._refresh_current)
@@ -411,6 +447,13 @@ class DriveFolderWidget(QWidget):
     # 面包屑导航
     # ========================
 
+    def _get_supported_mime_types(self):
+        selected = []
+        for cb in self.mime_actions.values():
+            if cb.isChecked():
+                selected.append(cb.property("mime"))
+        return selected if selected else None
+
     def _update_breadcrumb(self):
         """更新面包屑导航显示"""
         if not self._folder_stack:
@@ -487,7 +530,8 @@ class DriveFolderWidget(QWidget):
         self._worker = DriveFolderFetchWorker(
             folder_id, 
             recursive=self.recursive_fetch_check.isChecked(),
-            include_shared=self.include_shared_check.isChecked()
+            include_shared=self.include_shared_check.isChecked(),
+            supported_mime_types=self._get_supported_mime_types()
         )
         self._worker.progress.connect(lambda msg: self.status_label.setText(msg))
         self._worker.finished.connect(self._on_files_loaded)
@@ -737,9 +781,15 @@ class DriveFolderWidget(QWidget):
                 lambda: self._enter_folder(file_id, folder_name)
             )
 
-        # 复制链接
-        link_item = self.table.item(row, 1)
+        # 打开/复制链接
+        link_item = self.table.item(row, 3)
         if link_item and link_item.text() != "—":
+            import webbrowser
+            open_action = menu.addAction("🌐 在浏览器中打开")
+            open_action.triggered.connect(
+                lambda: webbrowser.open(link_item.text())
+            )
+            
             copy_link_action = menu.addAction("🔗 复制文件链接")
             copy_link_action.triggered.connect(
                 lambda: self._copy_to_clipboard(link_item.text())

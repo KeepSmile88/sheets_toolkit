@@ -43,6 +43,12 @@ def init_db():
         cursor.execute("SELECT password_hash FROM users WHERE username = 'admin'")
         result = cursor.fetchone()
         
+        # 兼容性处理：如果发现 admin 依然使用老的 SHA-256 哈希（没有 pbkdf2 前缀）
+        # 则强制重置为默认密码，避免 CodeQL 安全更新后导致老用户永久无法登录
+        if result and result[0] and not result[0].startswith("pbkdf2:"):
+            cursor.execute("DELETE FROM users WHERE username = 'admin'")
+            result = None
+        
         if not result:
             default_pw = base64.b64decode("YWRtaW5fMUAzJC4=").decode("utf-8")
             default_hash = _hash_password(default_pw)
