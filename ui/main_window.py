@@ -44,6 +44,7 @@ from services.command.backup_command import BackupCommand
 from services.command.permission_command import (
     InviteEditorCommand, RemoveAllPermissionsCommand
 )
+from core.config import APP_VERSION
 
 logger = logging.getLogger("sheets_toolkit.ui.main_window")
 
@@ -54,7 +55,7 @@ class MainWindow(QMainWindow):
     def __init__(self, theme_manager=None, role="admin", username=""):
         super().__init__()
         title_suffix = f" - {role} [{username}]"
-        self.setWindowTitle(f"📊 Google Sheets 工具箱{title_suffix}")
+        self.setWindowTitle(f"📊 Google Sheets 工具箱 {APP_VERSION}{title_suffix}")
         self.setMinimumSize(1100, 750)
         self.theme_manager = theme_manager
         self.role = role
@@ -571,6 +572,8 @@ class MainWindow(QMainWindow):
 
     def log(self, text):
         self.log_box.append(str(text))
+        scrollbar = self.log_box.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     def safe_exec(self, func):
         try:

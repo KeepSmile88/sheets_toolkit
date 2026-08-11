@@ -186,11 +186,18 @@ def file_matches_filter(file_data, keyword, match_mode, filter_target):
         return False
 
     if match_mode == "模糊匹配":
-        # 模糊匹配支持空格分隔的多重条件（AND 逻辑）
+        # 模糊匹配支持空格分隔的多重条件（AND 逻辑，!或！前缀表示排除）
         sub_keywords = [k for k in keyword.split() if k]
         for sub_kw in sub_keywords:
-            if not any(sub_kw.lower() in t.lower() for t in targets):
-                return False
+            if (sub_kw.startswith("!") or sub_kw.startswith("！")) and len(sub_kw) > 1:
+                # 排除逻辑：任何 target 中都不能包含此词
+                exclude_kw = sub_kw[1:]
+                if any(exclude_kw.lower() in t.lower() for t in targets):
+                    return False
+            else:
+                # 包含逻辑：必须有至少一个 target 包含此词
+                if not any(sub_kw.lower() in t.lower() for t in targets):
+                    return False
         return True
     else:
         for target in targets:
@@ -267,6 +274,7 @@ class DriveFolderWidget(QWidget):
         self.controller = controller
         self._worker = None
         self._files_cache = []  # 缓存当前加载的文件列表（未过滤）
+        self._folder_cache = {}  # 缓存已加载的文件夹数据：folder_id -> 文件列表
         self._folder_stack = []  # 导航栈：[(folder_id, folder_name), ...]
         self._current_folder_id = None  # 当前浏览的文件夹 ID
         self._setup_ui()
@@ -582,15 +590,33 @@ class DriveFolderWidget(QWidget):
         self._load_folder_by_id(folder_id)
 
     def _refresh_current(self):
-        """刷新当前文件夹"""
+        """刷新当前文件夹（强制清空缓存重新加载）"""
         if self._current_folder_id:
-            self._load_folder_by_id(self._current_folder_id)
+            self._load_folder_by_id(self._current_folder_id, force_refresh=True)
         else:
             self._on_load_clicked()
 
-    def _load_folder_by_id(self, folder_id):
+    def _load_folder_by_id(self, folder_id, force_refresh=False):
         """根据 folder_id 加载文件夹内容"""
         self._current_folder_id = folder_id
+        
+        # 尝试从缓存加载
+        if not force_refresh and folder_id in self._folder_cache:
+            self.status_label.setText(f"✅ 已从本地缓存恢复文件夹数据")
+            self.progress.setVisible(False)
+            self.load_btn.setText("📂 加载文件夹")
+            self.load_btn.setEnabled(True)
+            self.refresh_btn.setEnabled(True)
+            
+            self.table.setRowCount(0)
+            self._files_cache = []
+            
+            # 使用现有流式渲染函数，一次性注入缓存的数据
+            cached_files = self._folder_cache[folder_id]
+            self._on_batch_ready(cached_files)
+            self._update_breadcrumb()
+            return
+
         self.status_label.setText(f"⏳ 正在加载文件夹 ({folder_id[:20]}...)...")
         self.progress.setVisible(True)
         self.load_btn.setText("🛑 停止加载")
@@ -650,6 +676,9 @@ class DriveFolderWidget(QWidget):
         self.load_btn.setEnabled(True)
         self.refresh_btn.setEnabled(True)
         self._worker = None
+
+        # 存入缓存
+        self._folder_cache[self._current_folder_id] = self._files_cache.copy()
 
         self._update_breadcrumb()
         # 这里不需要再全量渲染一次，因为流式输出已经实时渲染了
@@ -726,11 +755,13 @@ class DriveFolderWidget(QWidget):
             raw_name = f.get("name", "—")
             mime = f.get("mimeType", "")
             icon = get_file_icon(mime)
+            perms = f.get("permissions", [])
 
             name_item = QTableWidgetItem(f"{icon} {raw_name}")
             name_item.setData(Qt.UserRole, f.get("id", ""))
             name_item.setData(Qt.UserRole + 1, mime)
             name_item.setData(Qt.UserRole + 2, raw_name)  # 存储原始名称
+            name_item.setData(Qt.UserRole + 3, perms)  # 存储预拉取的权限列表
 
             # 文件夹行加粗显示
             if "folder" in mime:
@@ -870,9 +901,10 @@ class DriveFolderWidget(QWidget):
             perm_action = menu.addAction(f"🔐 批量修改访问权限 ({len(selected_rows)} 个文件)")
             perm_action.triggered.connect(self._open_batch_permission_dialog)
         else:
+            perms = name_item.data(Qt.UserRole + 3) or []
             perm_action = menu.addAction("🔐 修改访问权限")
             perm_action.triggered.connect(
-                lambda: self._open_permission_dialog(file_id, file_name)
+                lambda: self._open_permission_dialog(file_id, file_name, perms)
             )
 
         # 如果是文件夹，添加"进入文件夹"选项
@@ -905,26 +937,27 @@ class DriveFolderWidget(QWidget):
         self.filter_input.clear()
         self._load_folder_by_id(folder_id)
 
-    def _open_permission_dialog(self, file_id, file_name):
+    def _open_permission_dialog(self, file_id, file_name, perms=None):
         """打开权限管理对话框（复用 PermissionManagerDialog）"""
         try:
             from ui.permission_manager_dialog import PermissionManagerDialog
 
             # 将文件信息组装成 PermissionManagerDialog 所需的格式
-            # 该对话框接受 entries 列表，每个 entry 含 id、spreadsheet_id、name
+            # 该对话框接受 entries 列表，每个 entry 含 id、spreadsheet_id、name、permissions
             # 这里 spreadsheet_id 实际上就是 Drive 文件的 ID（Drive API 通用）
             entries = [{
                 "id": file_id,
                 "spreadsheet_id": file_id,
-                "name": file_name
+                "name": file_name,
+                "permissions": perms
             }]
 
             dlg = PermissionManagerDialog(entries, parent=self)
             dlg.setWindowTitle(f"🔐 权限管理 — {file_name}")
             dlg.exec()
 
-            # 对话框关闭后刷新文件列表以反映权限变更
-            self._refresh_current()
+            # 对话框关闭后不强制刷新文件列表，以免频繁消耗 API 和导致数据重建
+            # self._refresh_current()
 
         except Exception as e:
             logger.error(f"打开权限管理失败: {e}")
@@ -948,11 +981,13 @@ class DriveFolderWidget(QWidget):
                 if not name_item: continue
                 fid = name_item.data(Qt.UserRole)
                 fname = name_item.data(Qt.UserRole + 2) or name_item.text()
+                perms = name_item.data(Qt.UserRole + 3) or []
                 if fid:
                     entries.append({
                         "id": fid,
                         "spreadsheet_id": fid,
-                        "name": fname
+                        "name": fname,
+                        "permissions": perms
                     })
             
             if not entries:
@@ -960,7 +995,7 @@ class DriveFolderWidget(QWidget):
 
             dlg = PermissionManagerDialog(entries, parent=self)
             dlg.exec()
-            self._refresh_current()
+            # self._refresh_current()
         except Exception as e:
             logger.error(f"打开批量权限管理失败: {e}")
             QMessageBox.warning(self, "错误", f"无法打开批量权限管理面板:\n{e}")

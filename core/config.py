@@ -5,6 +5,7 @@ from core.exceptions import ConfigError
 
 # 项目根目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP_VERSION = "V1.2"
 
 # 默认配置
 DEFAULT_CONFIG = {

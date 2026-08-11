@@ -1100,12 +1100,13 @@ class SheetService:
                 logger.warning(f"递归检查父级 {parent_id} 时出错: {e}")
 
     @retry_on_api_error()
-    def remove_all_permissions(self, recursive=False):
+    def remove_all_permissions(self, recursive=False, perms=None):
         """回收所有协作者权限（保留 owner）"""
-        perms = self.drive_api.permissions().list(
-            fileId=self.spreadsheet_id,
-            fields="permissions(id,emailAddress,role,type)"
-        ).execute().get("permissions", [])
+        if perms is None:
+            perms = self.drive_api.permissions().list(
+                fileId=self.spreadsheet_id,
+                fields="permissions(id,emailAddress,role,type)"
+            ).execute().get("permissions", [])
         removed = 0
         from googleapiclient.errors import HttpError
         for p in perms:
@@ -1136,12 +1137,13 @@ class SheetService:
         return removed
 
     @retry_on_api_error()
-    def remove_anyone_permission(self):
+    def remove_anyone_permission(self, perms=None):
         """取消公开链接访问（Anyone 转受限）"""
-        perms = self.drive_api.permissions().list(
-            fileId=self.spreadsheet_id,
-            fields="permissions(id,type)"
-        ).execute().get("permissions", [])
+        if perms is None:
+            perms = self.drive_api.permissions().list(
+                fileId=self.spreadsheet_id,
+                fields="permissions(id,type)"
+            ).execute().get("permissions", [])
         removed = 0
         from googleapiclient.errors import HttpError
         for p in perms:
@@ -1157,12 +1159,13 @@ class SheetService:
         return removed
 
     @retry_on_api_error()
-    def sync_permissions(self, target_emails, role="writer", recursive_remove=False):
+    def sync_permissions(self, target_emails, role="writer", recursive_remove=False, perms=None):
         """一键同步权限"""
-        perms = self.drive_api.permissions().list(
-            fileId=self.spreadsheet_id,
-            fields="permissions(id,emailAddress,role,type)"
-        ).execute().get("permissions", [])
+        if perms is None:
+            perms = self.drive_api.permissions().list(
+                fileId=self.spreadsheet_id,
+                fields="permissions(id,emailAddress,role,type)"
+            ).execute().get("permissions", [])
         
         target_emails_lower = {e.lower().strip() for e in target_emails if e.strip()}
         existing_emails_lower = set()

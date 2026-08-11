@@ -77,13 +77,20 @@ class PermissionFetchWorker(QThread):
                 sid = entry.get("spreadsheet_id", "")
                 name = entry.get("name", sid[:20])
                 eid = entry.get("id", "")
+                perms = entry.get("permissions", None)
                 if not sid:
                     continue
+                
+                if perms is not None:
+                    # 如果已经有预先获取的权限（如从网盘列表带过来），直接使用，避免二次请求 API
+                    self.entry_done.emit(eid, name, perms)
+                    continue
+
                 self.progress.emit(i, total, f"({i+1}/{total}) 获取: {name}")
                 try:
                     service = SheetService(sid)
-                    perms = service.list_permissions()
-                    self.entry_done.emit(eid, name, perms)
+                    fetched_perms = service.list_permissions()
+                    self.entry_done.emit(eid, name, fetched_perms)
                 except Exception as e:
                     logger.error(f"获取 {name} 权限失败: {e}")
                     self.entry_done.emit(eid, name, [])
@@ -100,10 +107,11 @@ class PermissionActionWorker(QThread):
     finished = Signal(str)
     error = Signal(str)
 
-    def __init__(self, action, spreadsheet_ids, **kwargs):
+    def __init__(self, action, spreadsheet_ids, perms_map=None, **kwargs):
         super().__init__()
         self.action = action  # "add" / "update" / "remove"
         self.spreadsheet_ids = spreadsheet_ids
+        self.perms_map = perms_map or {}
         self.kwargs = kwargs
 
     def run(self):
@@ -152,12 +160,15 @@ class PermissionActionWorker(QThread):
                         service.set_copy_requires_writer_permission(False)
                         service.set_writers_can_share_permission(True)
                     elif self.action == "remove_all_permissions":
-                        service.remove_all_permissions(recursive=self.kwargs.get("recursive_up", False))
+                        perms = self.perms_map.get(sid)
+                        service.remove_all_permissions(recursive=self.kwargs.get("recursive_up", False), perms=perms)
                     elif self.action == "sync_permissions":
                         emails = [e.strip() for e in self.kwargs["email"].split(",") if e.strip()]
-                        service.sync_permissions(emails, self.kwargs.get("role", "writer"), recursive_remove=self.kwargs.get("recursive_up", False))
+                        perms = self.perms_map.get(sid)
+                        service.sync_permissions(emails, self.kwargs.get("role", "writer"), recursive_remove=self.kwargs.get("recursive_up", False), perms=perms)
                     elif self.action == "remove_anyone_permission":
-                        service.remove_anyone_permission()
+                        perms = self.perms_map.get(sid)
+                        service.remove_anyone_permission(perms=perms)
                     success += 1
                 except Exception as e:
                     logger.error(f"权限操作失败 [{sid}]: {e}")
@@ -700,7 +711,8 @@ class PermissionManagerDialog(QDialog):
 
     def _run_action(self, action, sids, **kwargs):
         """执行权限操作"""
-        self._action_worker = PermissionActionWorker(action, sids, **kwargs)
+        perms_map = {e.get("spreadsheet_id"): e.get("permissions") for e in self.entries if e.get("spreadsheet_id") and e.get("permissions") is not None}
+        self._action_worker = PermissionActionWorker(action, sids, perms_map=perms_map, **kwargs)
         self.progress.setVisible(True)
         self.progress.setMaximum(len(sids))
         self.status_label.setText("⏳ 执行中...")
