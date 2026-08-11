@@ -1003,16 +1003,21 @@ class SheetService:
         return result
 
     @retry_on_api_error()
-    def set_permission(self, email, role='writer'):
+    def set_permission(self, email, role='writer', batch=None):
         """设置用户权限"""
         body = {
             'type': 'user',
             'role': role,
             'emailAddress': email
         }
-        result = self.drive_api.permissions().create(
+        req = self.drive_api.permissions().create(
             fileId=self.spreadsheet_id, body=body, fields='id'
-        ).execute()
+        )
+        if batch is not None:
+            batch.add(req)
+            return None
+            
+        result = req.execute()
         logger.info(f"已设置 {email} 权限为 {role}")
         return result
 
@@ -1026,7 +1031,7 @@ class SheetService:
         ).execute()
 
     @retry_on_api_error()
-    def set_copy_requires_writer_permission(self, require_writer: bool = True):
+    def set_copy_requires_writer_permission(self, require_writer: bool = True, batch=None):
         """
         设置“严禁针对该工作簿拉取副本、打印、下载”的安全选项。
         该选项会静默锁定所有 Reader 和 Commenter 的可导出版权。
@@ -1034,18 +1039,23 @@ class SheetService:
         body = {
             "copyRequiresWriterPermission": require_writer
         }
-        res = self.drive_api.files().update(
+        req = self.drive_api.files().update(
             fileId=self.spreadsheet_id,
             body=body,
             fields="id, copyRequiresWriterPermission"
-        ).execute()
+        )
+        if batch is not None:
+            batch.add(req)
+            return None
+            
+        res = req.execute()
 
         status = "开启" if require_writer else "关闭"
         logger.info(f"成功将工作簿 {self.spreadsheet_id} 防盗版控制 {status}")
         return res
 
     @retry_on_api_error()
-    def set_writers_can_share_permission(self, can_share: bool = False):
+    def set_writers_can_share_permission(self, can_share: bool = False, batch=None):
         """
         限制编辑者是否具有分享工作簿和更改工作簿权限的能力。
         当 can_share=False 时，仅有 Owner (所有者) 可以管理权限。
@@ -1053,11 +1063,16 @@ class SheetService:
         body = {
             "writersCanShare": can_share
         }
-        res = self.drive_api.files().update(
+        req = self.drive_api.files().update(
             fileId=self.spreadsheet_id,
             body=body,
             fields="id, writersCanShare"
-        ).execute()
+        )
+        if batch is not None:
+            batch.add(req)
+            return None
+            
+        res = req.execute()
 
         status = "独占已开启 (编辑者不可分享)" if not can_share else "独占已关闭 (编辑者可分享)"
         logger.info(f"成功将工作簿 {self.spreadsheet_id} 分享权限制修改为: {status}")
@@ -1100,7 +1115,7 @@ class SheetService:
                 logger.warning(f"递归检查父级 {parent_id} 时出错: {e}")
 
     @retry_on_api_error()
-    def remove_all_permissions(self, recursive=False, perms=None):
+    def remove_all_permissions(self, recursive=False, perms=None, batch=None):
         """回收所有协作者权限（保留 owner）"""
         if perms is None:
             perms = self.drive_api.permissions().list(
@@ -1111,10 +1126,16 @@ class SheetService:
         from googleapiclient.errors import HttpError
         for p in perms:
             if p["role"] != "owner":
+                req = self.drive_api.permissions().delete(
+                    fileId=self.spreadsheet_id, permissionId=p["id"]
+                )
+                if batch is not None:
+                    batch.add(req)
+                    removed += 1
+                    continue
+                    
                 try:
-                    self.drive_api.permissions().delete(
-                        fileId=self.spreadsheet_id, permissionId=p["id"]
-                    ).execute()
+                    req.execute()
                     removed += 1
                 except HttpError as e:
                     if 'cannotDeletePermission' in str(e):
@@ -1137,7 +1158,7 @@ class SheetService:
         return removed
 
     @retry_on_api_error()
-    def remove_anyone_permission(self, perms=None):
+    def remove_anyone_permission(self, perms=None, batch=None):
         """取消公开链接访问（Anyone 转受限）"""
         if perms is None:
             perms = self.drive_api.permissions().list(
@@ -1148,10 +1169,16 @@ class SheetService:
         from googleapiclient.errors import HttpError
         for p in perms:
             if p.get("type") == "anyone":
+                req = self.drive_api.permissions().delete(
+                    fileId=self.spreadsheet_id, permissionId=p["id"]
+                )
+                if batch is not None:
+                    batch.add(req)
+                    removed += 1
+                    continue
+                    
                 try:
-                    self.drive_api.permissions().delete(
-                        fileId=self.spreadsheet_id, permissionId=p["id"]
-                    ).execute()
+                    req.execute()
                     removed += 1
                 except HttpError as e:
                     logger.warning(f"删除 anyone 权限失败: {e}")
@@ -1159,7 +1186,7 @@ class SheetService:
         return removed
 
     @retry_on_api_error()
-    def sync_permissions(self, target_emails, role="writer", recursive_remove=False, perms=None):
+    def sync_permissions(self, target_emails, role="writer", recursive_remove=False, perms=None, batch=None):
         """一键同步权限"""
         if perms is None:
             perms = self.drive_api.permissions().list(
@@ -1180,10 +1207,15 @@ class SheetService:
                 
             if p.get("type") == "user" and email:
                 if email not in target_emails_lower:
+                    req = self.drive_api.permissions().delete(
+                        fileId=self.spreadsheet_id, permissionId=p["id"]
+                    )
+                    if batch is not None:
+                        batch.add(req)
+                        continue
+                        
                     try:
-                        self.drive_api.permissions().delete(
-                            fileId=self.spreadsheet_id, permissionId=p["id"]
-                        ).execute()
+                        req.execute()
                     except HttpError as e:
                         if 'cannotDeletePermission' in str(e):
                             if recursive_remove:
@@ -1203,9 +1235,9 @@ class SheetService:
                     
         for email in target_emails_lower:
             if email not in existing_emails_lower:
-                self.set_permission(email, role)
+                self.set_permission(email, role, batch=batch)
                 
-        logger.info(f"一键同步权限完成，目标 {len(target_emails_lower)} 个用户")
+        logger.info(f"一键同步权限已生成，目标 {len(target_emails_lower)} 个用户")
 
     @retry_on_api_error()
     def list_permissions(self):
@@ -1224,25 +1256,30 @@ class SheetService:
         return perms
 
     @retry_on_api_error()
-    def accept_ownership(self, permission_id):
+    def accept_ownership(self, permission_id, batch=None):
         """
         接受转让的所有者权限。
 
         Args:
             permission_id: 权限 ID
         """
-        result = self.drive_api.permissions().update(
+        req = self.drive_api.permissions().update(
             fileId=self.spreadsheet_id,
             permissionId=permission_id,
             body={"role": "owner"},
             transferOwnership=True,
             fields="id,role,emailAddress"
-        ).execute()
+        )
+        if batch is not None:
+            batch.add(req)
+            return None
+            
+        result = req.execute()
         logger.info(f"已接受所有者权限: {permission_id}")
         return result
 
     @retry_on_api_error()
-    def remove_permission(self, permission_id, recursive=False, email=None):
+    def remove_permission(self, permission_id, recursive=False, email=None, batch=None):
         """
         移除指定的协作者权限。
         
@@ -1252,11 +1289,16 @@ class SheetService:
             email: 目标邮箱（用于递归清理）
         """
         from googleapiclient.errors import HttpError
+        req = self.drive_api.permissions().delete(
+            fileId=self.spreadsheet_id,
+            permissionId=permission_id
+        )
+        if batch is not None:
+            batch.add(req)
+            return None
+            
         try:
-            self.drive_api.permissions().delete(
-                fileId=self.spreadsheet_id,
-                permissionId=permission_id
-            ).execute()
+            req.execute()
             logger.info(f"已移除权限: {permission_id}")
         except HttpError as e:
             if 'cannotDeletePermission' in str(e):
@@ -1276,7 +1318,7 @@ class SheetService:
                 raise
 
     @retry_on_api_error()
-    def update_permission(self, permission_id, role):
+    def update_permission(self, permission_id, role, batch=None):
         """
         更新指定协作者的权限角色。
 
@@ -1284,12 +1326,17 @@ class SheetService:
             permission_id: 权限 ID
             role: 新角色（'reader' 或 'writer'）
         """
-        result = self.drive_api.permissions().update(
+        req = self.drive_api.permissions().update(
             fileId=self.spreadsheet_id,
             permissionId=permission_id,
             body={"role": role},
             fields="id,role,emailAddress"
-        ).execute()
+        )
+        if batch is not None:
+            batch.add(req)
+            return None
+            
+        result = req.execute()
         logger.info(f"已更新权限 {permission_id} 为 {role}")
         return result
 

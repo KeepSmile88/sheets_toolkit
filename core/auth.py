@@ -245,6 +245,10 @@ class AuthManager:
                 self._local.drive_api = build('drive', 'v3', credentials=self._creds)
         return self._local.drive_api
 
+    def create_batch_request(self, callback=None):
+        """创建一个能够批量处理多个 Drive API 请求的 BatchHttpRequest 对象。"""
+        return self.drive_api.new_batch_http_request(callback=callback)
+
     def refresh(self):
         """强制刷新认证（清除缓存并重新认证）"""
         logger.info("强制刷新认证...")

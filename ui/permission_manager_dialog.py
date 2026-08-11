@@ -117,6 +117,8 @@ class PermissionActionWorker(QThread):
     def run(self):
         try:
             from services.sheet_service import SheetService
+            from core.auth import AuthManager
+            import time
             
             # 处理递归展开
             actual_sids = set()
@@ -133,11 +135,19 @@ class PermissionActionWorker(QThread):
                 actual_sids = set(self.spreadsheet_ids)
                 
             actual_sids = list(actual_sids)
-            total = len(actual_sids)
-            success = 0
+            total_files = len(actual_sids)
+            
+            # 用于收集所有需要执行的 Request
+            class RequestCollector:
+                def __init__(self):
+                    self.requests = []
+                def add(self, req):
+                    self.requests.append(req)
+                    
+            collector = RequestCollector()
 
             for i, sid in enumerate(actual_sids):
-                self.progress.emit(i, total, f"({i+1}/{total}) 处理中...")
+                self.progress.emit(i, total_files, f"({i+1}/{total_files}) 构建请求中...")
                 try:
                     service = SheetService(sid)
                     if self.action == "add":
@@ -145,35 +155,69 @@ class PermissionActionWorker(QThread):
                         for email in emails:
                             service.set_permission(
                                 email,
-                                self.kwargs.get("role", "writer")
+                                self.kwargs.get("role", "writer"),
+                                batch=collector
                             )
                     elif self.action == "update":
                         service.update_permission(
                             self.kwargs["permission_id"],
-                            self.kwargs["role"]
+                            self.kwargs["role"],
+                            batch=collector
                         )
                     elif self.action == "set_secure":
-                        service.set_copy_requires_writer_permission(self.kwargs.get("enable", True))
+                        service.set_copy_requires_writer_permission(self.kwargs.get("enable", True), batch=collector)
                     elif self.action == "set_owners_only":
-                        service.set_writers_can_share_permission(not self.kwargs.get("enable", True))
+                        service.set_writers_can_share_permission(not self.kwargs.get("enable", True), batch=collector)
                     elif self.action == "remove_all_secure":
-                        service.set_copy_requires_writer_permission(False)
-                        service.set_writers_can_share_permission(True)
+                        service.set_copy_requires_writer_permission(False, batch=collector)
+                        service.set_writers_can_share_permission(True, batch=collector)
                     elif self.action == "remove_all_permissions":
                         perms = self.perms_map.get(sid)
-                        service.remove_all_permissions(recursive=self.kwargs.get("recursive_up", False), perms=perms)
+                        service.remove_all_permissions(recursive=self.kwargs.get("recursive_up", False), perms=perms, batch=collector)
                     elif self.action == "sync_permissions":
                         emails = [e.strip() for e in self.kwargs["email"].split(",") if e.strip()]
                         perms = self.perms_map.get(sid)
-                        service.sync_permissions(emails, self.kwargs.get("role", "writer"), recursive_remove=self.kwargs.get("recursive_up", False), perms=perms)
+                        service.sync_permissions(emails, self.kwargs.get("role", "writer"), recursive_remove=self.kwargs.get("recursive_up", False), perms=perms, batch=collector)
                     elif self.action == "remove_anyone_permission":
                         perms = self.perms_map.get(sid)
-                        service.remove_anyone_permission(perms=perms)
-                    success += 1
+                        service.remove_anyone_permission(perms=perms, batch=collector)
                 except Exception as e:
-                    logger.error(f"权限操作失败 [{sid}]: {e}")
+                    logger.error(f"构建权限请求失败 [{sid}]: {e}")
 
-            self.finished.emit(f"完成: {success}/{total} 成功")
+            # 将所有收集到的 requests 进行切片批量发送
+            all_requests = collector.requests
+            total_requests = len(all_requests)
+            if total_requests == 0:
+                self.finished.emit(f"完成: 不需要进行任何权限修改")
+                return
+                
+            auth = AuthManager()
+            success_count = 0
+            
+            def batch_callback(request_id, response, exception):
+                nonlocal success_count
+                if exception:
+                    logger.error(f"批量请求中单个操作失败: {exception}")
+                else:
+                    success_count += 1
+                    
+            BATCH_SIZE = 50
+            for start_idx in range(0, total_requests, BATCH_SIZE):
+                chunk = all_requests[start_idx:start_idx + BATCH_SIZE]
+                self.progress.emit(start_idx, total_requests, f"批量发送中... ({start_idx+1}-{start_idx+len(chunk)}/{total_requests})")
+                
+                batch_req = auth.create_batch_request(callback=batch_callback)
+                for req in chunk:
+                    batch_req.add(req)
+                    
+                try:
+                    batch_req.execute()
+                except Exception as e:
+                    logger.error(f"批量请求发送失败: {e}")
+                    
+                time.sleep(0.5)  # 简短的延迟防频率过高
+
+            self.finished.emit(f"完成: {success_count}/{total_requests} 项修改成功 (涉及 {total_files} 个文件)")
         except Exception as e:
             self.error.emit(str(e))
 
