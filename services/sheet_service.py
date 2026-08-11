@@ -1820,7 +1820,7 @@ class SheetService:
     # ========================
 
     @staticmethod
-    def list_folder_files(folder_id, check_cancelled=None, supported_mime_types=None):
+    def list_folder_files(folder_id, check_cancelled=None, supported_mime_types=None, batch_callback=None):
         """
         列出 Google Drive 文件夹下的所有文件。
 
@@ -1870,7 +1870,11 @@ class SheetService:
                 includeItemsFromAllDrives=True
             ).execute()
 
-            files.extend(resp.get("files", []))
+            batch = resp.get("files", [])
+            files.extend(batch)
+            if batch_callback and batch:
+                batch_callback(batch)
+                
             page_token = resp.get("nextPageToken")
             if not page_token:
                 break
@@ -1929,7 +1933,7 @@ class SheetService:
         return list(set(all_file_ids))
 
     @staticmethod
-    def list_all_files_with_path(folder_id, progress_callback=None, include_shared=True, check_cancelled=None, supported_mime_types=None):
+    def list_all_files_with_path(folder_id, progress_callback=None, include_shared=True, check_cancelled=None, supported_mime_types=None, batch_callback=None):
         """
         递归获取文件夹下的所有 Google Drive 文件，并包含相对路径。
         若 folder_id 为 "root"，则进行全局检索（包含 Shared with me, Shared Drives）。
@@ -2017,10 +2021,15 @@ class SheetService:
                         includeItemsFromAllDrives=True
                     ).execute()
 
+                    batch_files = []
                     for file in resp.get("files", []):
                         file["path"] = build_path(file.get("parents", []))
                         all_spreadsheets.append(file)
+                        batch_files.append(file)
                         processed_count += 1
+                        
+                    if batch_callback and batch_files:
+                        batch_callback(batch_files)
 
                     if progress_callback and processed_count % 100 == 0:
                         progress_callback(f"已获取 {processed_count} 个文件...")
@@ -2058,6 +2067,7 @@ class SheetService:
                             includeItemsFromAllDrives=True
                         ).execute()
 
+                        batch_files = []
                         for file in resp.get("files", []):
                             mime_type = file.get("mimeType")
                             file_name = file.get("name", "")
@@ -2080,9 +2090,13 @@ class SheetService:
                                 if is_match:
                                     file["path"] = current_path
                                     all_spreadsheets.append(file)
+                                    batch_files.append(file)
                                     processed_count += 1
                                     if progress_callback:
                                         progress_callback(f"已找到 {processed_count} 个文件: {current_path}{file_name}")
+
+                        if batch_callback and batch_files:
+                            batch_callback(batch_files)
 
                         page_token = resp.get("nextPageToken")
                         if not page_token:

@@ -49,6 +49,14 @@ def retry_on_api_error(max_retries=3, base_delay=1.0):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            import ssl
+            import socket
+            try:
+                import httplib2
+                HttpLib2Error = httplib2.HttpLib2Error
+            except ImportError:
+                class HttpLib2Error(Exception): pass
+
             last_error = None
             for attempt in range(max_retries + 1):
                 try:
@@ -68,6 +76,19 @@ def retry_on_api_error(max_retries=3, base_delay=1.0):
                         raise APIError(
                             f"API 调用失败: {str(e)}",
                             status_code=status
+                        ) from e
+                except (ssl.SSLError, socket.error, HttpLib2Error, ConnectionError) as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(
+                            f"底层网络或 SSL 异常，"
+                            f"{delay:.1f}秒后第 {attempt + 1} 次重试: {e}"
+                        )
+                        time.sleep(delay)
+                    else:
+                        raise SheetToolkitError(
+                            f"网络操作频繁或断开，最终重试失败: {str(e)}"
                         ) from e
                 except Exception as e:
                     raise SheetToolkitError(f"操作执行失败: {str(e)}") from e

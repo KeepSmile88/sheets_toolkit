@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QMessageBox, QWidget
+    QLineEdit, QPushButton, QMessageBox, QWidget, QToolButton
 )
 from PySide6.QtCore import Qt
 from core.db import has_password, verify_password
@@ -53,6 +53,18 @@ class LoginDialog(QDialog):
         self.password_input.setEchoMode(QLineEdit.Password)
         self.password_layout.addWidget(self.password_input)
         
+        self.toggle_pwd_btn = QToolButton(self.password_input)
+        self.toggle_pwd_btn.setText("👁️")
+        self.toggle_pwd_btn.setCursor(Qt.PointingHandCursor)
+        self.toggle_pwd_btn.setStyleSheet("QToolButton { border: none; background: transparent; padding: 0; }")
+        self.toggle_pwd_btn.setCheckable(True)
+        self.toggle_pwd_btn.clicked.connect(self.toggle_password_visibility)
+        
+        pwd_layout = QHBoxLayout(self.password_input)
+        pwd_layout.setContentsMargins(0, 0, 4, 0)
+        pwd_layout.addWidget(self.toggle_pwd_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
+        self.password_input.setTextMargins(0, 0, 24, 0)
+        
         self.password_widget = QWidget()
         self.password_widget.setLayout(self.password_layout)
         self.password_widget.setVisible(False)
@@ -67,6 +79,14 @@ class LoginDialog(QDialog):
         
         # 初始化检查空状态（guest）
         self.on_account_changed("")
+        
+    def toggle_password_visibility(self, checked):
+        if checked:
+            self.password_input.setEchoMode(QLineEdit.Normal)
+            self.toggle_pwd_btn.setText("🙈")
+        else:
+            self.password_input.setEchoMode(QLineEdit.Password)
+            self.toggle_pwd_btn.setText("👁️")
         
     def on_account_changed(self, text):
         account = text.strip()

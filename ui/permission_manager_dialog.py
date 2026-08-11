@@ -594,7 +594,17 @@ class PermissionManagerDialog(QDialog):
             sids = list(set(r["sid"] for r in selected if r["sid"]))
             
         if not sids:
+            self.status_label.setText("⚠️ 没有选定可操作的表格")
             return
+            
+        if QMessageBox.question(
+            self, "解除高级锁定确认",
+            f"确定要为 {len(sids)} 个表格解除所有高阶安全限制吗？\n(包含允许复制/下载 和 允许编辑者分享)",
+            QMessageBox.Yes | QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+
+        self._run_action("remove_all_secure", sids, recursive_down=self.apply_recursive_check.isChecked())
             
     def _sync_permissions(self):
         """一键同步权限：用输入的邮箱完全替换现有的权限"""
@@ -643,28 +653,7 @@ class PermissionManagerDialog(QDialog):
             return
 
         self._run_action("remove_anyone_permission", sids, recursive_down=self.apply_recursive_check.isChecked())
-            
-        if QMessageBox.question(
-            self, "解除高级锁定",
-            "确定要解除选中表格的所有高级安全封锁吗？\n（包括恢复只读用户的复制/下载权，以及恢复编辑者的全权分享权）",
-            QMessageBox.Yes | QMessageBox.No
-        ) != QMessageBox.Yes:
-            return
-            
-        # 这里用一个小 Trick 连续触发两次解绑动作：因 action 采用单线程串联，需组合发送或分开执行。
-        # 为了简洁交互，我们先执行解除复制限制，用户可以看提示后再点其他。
-        # 但既然后台支持通过 Worker 进行队列或者覆盖调用，我们采用直接修改 Worker 逻辑：
-        self._action_worker = PermissionActionWorker("remove_all_secure", sids, recursive_down=self.apply_recursive_check.isChecked())
-        self.progress.setVisible(True)
-        self.progress.setMaximum(len(sids))
-        self.status_label.setText("⏳ 正在解除全部锁定...")
 
-        self._action_worker.progress.connect(
-            lambda c, t, m: (self.progress.setValue(c), self.status_label.setText(m))
-        )
-        self._action_worker.finished.connect(self._on_action_done)
-        self._action_worker.error.connect(self._on_error)
-        self._action_worker.start()
 
     def _batch_permission_ops(self, selected, action, **kwargs):
         """批量执行权限操作（逐个调用）"""

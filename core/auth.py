@@ -38,8 +38,8 @@ class AuthManager:
             return
         self._initialized = True
         self._creds = None
-        self._sheets_api = None
-        self._drive_api = None
+        import threading
+        self._local = threading.local()
         self._token_path = os.path.join(BASE_DIR, "token.json")
         self._creds_path = os.path.join(BASE_DIR, "credentials.json")
         self._user_email = None
@@ -91,10 +91,13 @@ class AuthManager:
 
     def _build_services(self, creds):
         """根据凭据构建 API 服务实例并获取用户邮箱"""
-        self._sheets_api = build('sheets', 'v4', credentials=creds)
-        self._drive_api = build('drive', 'v3', credentials=creds)
+        if not hasattr(self, '_local'):
+            import threading
+            self._local = threading.local()
+        self._local.sheets_api = build('sheets', 'v4', credentials=creds)
+        self._local.drive_api = build('drive', 'v3', credentials=creds)
         try:
-            about = self._drive_api.about().get(fields="user").execute()
+            about = self._local.drive_api.about().get(fields="user").execute()
             self._user_email = about.get("user", {}).get("emailAddress", "")
             logger.info(f"当前用户: {self._user_email}")
         except Exception:
@@ -150,8 +153,9 @@ class AuthManager:
 
         # 清除旧的 token 和 API 实例
         self._creds = None
-        self._sheets_api = None
-        self._drive_api = None
+        if hasattr(self, '_local'):
+            self._local.sheets_api = None
+            self._local.drive_api = None
         self._user_email = None
 
         # 删除旧 token 文件（强制重新认证）
@@ -196,12 +200,15 @@ class AuthManager:
                 logger.info("凭据已保存")
 
             self._creds = creds
-            self._sheets_api = build('sheets', 'v4', credentials=creds)
-            self._drive_api = build('drive', 'v3', credentials=creds)
+            if not hasattr(self, '_local'):
+                import threading
+                self._local = threading.local()
+            self._local.sheets_api = build('sheets', 'v4', credentials=creds)
+            self._local.drive_api = build('drive', 'v3', credentials=creds)
 
             # 获取当前用户邮箱
             try:
-                about = self._drive_api.about().get(fields="user").execute()
+                about = self._local.drive_api.about().get(fields="user").execute()
                 self._user_email = about.get("user", {}).get("emailAddress", "")
                 logger.info(f"Google API 认证成功: {self._user_email}")
             except Exception:
@@ -215,30 +222,44 @@ class AuthManager:
     @property
     def sheets_api(self):
         """获取 Sheets API 服务实例"""
-        if self._sheets_api is None:
-            self._authenticate()
-        return self._sheets_api
+        if not hasattr(self, '_local'):
+            import threading
+            self._local = threading.local()
+        if getattr(self._local, 'sheets_api', None) is None:
+            if not self.is_authenticated:
+                self._authenticate()
+            else:
+                self._local.sheets_api = build('sheets', 'v4', credentials=self._creds)
+        return self._local.sheets_api
 
     @property
     def drive_api(self):
         """获取 Drive API 服务实例"""
-        if self._drive_api is None:
-            self._authenticate()
-        return self._drive_api
+        if not hasattr(self, '_local'):
+            import threading
+            self._local = threading.local()
+        if getattr(self._local, 'drive_api', None) is None:
+            if not self.is_authenticated:
+                self._authenticate()
+            else:
+                self._local.drive_api = build('drive', 'v3', credentials=self._creds)
+        return self._local.drive_api
 
     def refresh(self):
         """强制刷新认证（清除缓存并重新认证）"""
         logger.info("强制刷新认证...")
-        self._sheets_api = None
-        self._drive_api = None
+        if hasattr(self, '_local'):
+            self._local.sheets_api = None
+            self._local.drive_api = None
         self._creds = None
         self._authenticate()
 
     def logout(self):
         """注销：清除 token 文件和所有缓存"""
         self._creds = None
-        self._sheets_api = None
-        self._drive_api = None
+        if hasattr(self, '_local'):
+            self._local.sheets_api = None
+            self._local.drive_api = None
         self._user_email = None
 
         if os.path.exists(self._token_path):

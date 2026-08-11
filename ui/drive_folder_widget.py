@@ -135,55 +135,82 @@ def file_matches_filter(file_data, keyword, match_mode, filter_target):
 
     targets = []
     
-    if filter_target == "按文件名":
+    if filter_target in ("按文件名", "全部属性"):
         name = file_data.get("name", "")
         if name:
             targets.append(name)
-    elif filter_target == "按归属":
+            
+    if filter_target in ("按归属", "全部属性"):
         owned = file_data.get("ownedByMe", False)
         owner_str = "我的" if owned else "别人共享"
         targets.append(owner_str)
         targets.append("👤 我的" if owned else "🤝 别人共享")
-    else:
-        # 按用户名/邮箱
+        
+    if filter_target in ("按文件权限", "全部属性"):
         permissions = file_data.get("permissions", [])
-        if not permissions:
-            return False
-            
-        for p in permissions:
-            email = p.get("emailAddress", "")
-            display_name = p.get("displayName", "")
-            if email:
-                targets.append(email)
-                targets.append(email.split("@")[0])  # 用户名部分
-            if display_name:
-                targets.append(display_name)
+        if permissions:
+            role_map = {
+                "owner": "👑所有者",
+                "writer": "✏️编辑",
+                "reader": "👁阅读",
+                "commenter": "💬评论"
+            }
+            for p in permissions:
+                role = p.get("role", "")
+                ptype = p.get("type", "")
+                
+                if role:
+                    targets.append(role)
+                    targets.append(role_map.get(role, role))
+                    
+                if ptype:
+                    targets.append(ptype)
+                    if ptype == "anyone":
+                        targets.append("所有人")
+                    elif ptype == "domain":
+                        targets.append("域")
+                        
+    if filter_target in ("按用户名/邮箱", "全部属性"):
+        permissions = file_data.get("permissions", [])
+        if permissions:
+            for p in permissions:
+                email = p.get("emailAddress", "")
+                display_name = p.get("displayName", "")
+                if email:
+                    targets.append(email)
+                    targets.append(email.split("@")[0])
+                if display_name:
+                    targets.append(display_name)
 
     if not targets:
         return False
 
-    for target in targets:
-        if match_mode == "精准匹配":
-            if keyword == target:
-                return True
-        elif match_mode == "模糊匹配":
-            if keyword.lower() in target.lower():
-                return True
-        elif match_mode == "正则匹配":
-            try:
-                if re.search(keyword, target, re.IGNORECASE):
+    if match_mode == "模糊匹配":
+        # 模糊匹配支持空格分隔的多重条件（AND 逻辑）
+        sub_keywords = [k for k in keyword.split() if k]
+        for sub_kw in sub_keywords:
+            if not any(sub_kw.lower() in t.lower() for t in targets):
+                return False
+        return True
+    else:
+        for target in targets:
+            if match_mode == "精准匹配":
+                if keyword == target:
                     return True
-            except re.error:
-                # 正则语法错误时退化为模糊匹配
-                if keyword.lower() in target.lower():
-                    return True
-
-    return False
+            elif match_mode == "正则匹配":
+                try:
+                    if re.search(keyword, target, re.IGNORECASE):
+                        return True
+                except re.error:
+                    if keyword.lower() in target.lower():
+                        return True
+        return False
 
 
 class DriveFolderFetchWorker(QThread):
     """后台线程 — 异步获取文件夹中的文件列表"""
     progress = Signal(str)
+    batch_ready = Signal(list)
     finished = Signal(str, list)  # (folder_id, 文件列表)
     error = Signal(str)
 
@@ -204,14 +231,16 @@ class DriveFolderFetchWorker(QThread):
                     self.progress.emit,
                     include_shared=self.include_shared,
                     check_cancelled=self.isInterruptionRequested,
-                    supported_mime_types=self.supported_mime_types
+                    supported_mime_types=self.supported_mime_types,
+                    batch_callback=self.batch_ready.emit
                 )
             else:
                 self.progress.emit("⏳ 正在获取文件夹内容...")
                 files = SheetService.list_folder_files(
                     self.folder_id,
                     check_cancelled=self.isInterruptionRequested,
-                    supported_mime_types=self.supported_mime_types
+                    supported_mime_types=self.supported_mime_types,
+                    batch_callback=self.batch_ready.emit
                 )
             if self.isInterruptionRequested():
                 self.error.emit("已取消加载")
@@ -300,17 +329,59 @@ class DriveFolderWidget(QWidget):
                 "视频 (Video)": "video/"
             }
         
+        from core.config import AppConfig
+        config = AppConfig()
+        saved_mimes = config.get("drive_folder_mime_checked", ["application/vnd.google-apps.spreadsheet"])
+
         from PySide6.QtWidgets import QWidgetAction
+        
+        self.select_all_action = QWidgetAction(self.mime_menu)
+        self.select_all_cb = QCheckBox("全选 / 取消全选")
+        self.select_all_cb.setStyleSheet("QCheckBox { padding: 4px 15px; margin: 2px 0px; font-weight: bold; color: #1565C0; } QCheckBox:hover { background-color: #f0f0f0; }")
+        
+        def save_mime_config():
+            checked_mimes = [cb.property("mime") for cb in self.mime_actions.values() if cb.isChecked()]
+            AppConfig().set("drive_folder_mime_checked", checked_mimes)
+            
+        def on_select_all_toggled(checked):
+            for cb in self.mime_actions.values():
+                cb.blockSignals(True)
+                cb.setChecked(checked)
+                cb.blockSignals(False)
+            save_mime_config()
+                
+        self.select_all_cb.toggled.connect(on_select_all_toggled)
+        self.select_all_action.setDefaultWidget(self.select_all_cb)
+        self.mime_menu.addAction(self.select_all_action)
+        self.mime_menu.addSeparator()
+        
+        def on_item_toggled(*args):
+            if not self.mime_actions: return
+            all_checked = all(cb.isChecked() for cb in self.mime_actions.values())
+            self.select_all_cb.blockSignals(True)
+            self.select_all_cb.setChecked(all_checked)
+            self.select_all_cb.blockSignals(False)
+            save_mime_config()
+
         for label, mime in mime_types.items():
             action = QWidgetAction(self.mime_menu)
             cb = QCheckBox(label)
             cb.setStyleSheet("QCheckBox { padding: 4px 15px; margin: 2px 0px; } QCheckBox:hover { background-color: #f0f0f0; }")
-            if "spreadsheet" in mime:
-                cb.setChecked(True)
+            
             cb.setProperty("mime", mime)
+            if mime in saved_mimes:
+                cb.setChecked(True)
+                
+            cb.toggled.connect(on_item_toggled)
             action.setDefaultWidget(cb)
             self.mime_menu.addAction(action)
             self.mime_actions[label] = cb
+            
+        # Initialize select_all state without triggering save_mime_config yet
+        all_checked = all(cb.isChecked() for cb in self.mime_actions.values())
+        self.select_all_cb.blockSignals(True)
+        self.select_all_cb.setChecked(all_checked)
+        self.select_all_cb.blockSignals(False)
 
         self.mime_btn = QPushButton("📄 文件类型...")
         self.mime_btn.setMenu(self.mime_menu)
@@ -345,7 +416,7 @@ class DriveFolderWidget(QWidget):
         filter_row.addWidget(QLabel("🔍 过滤:"))
         
         self.filter_target_combo = QComboBox()
-        self.filter_target_combo.addItems(["按用户名/邮箱", "按文件名", "按归属"])
+        self.filter_target_combo.addItems(["全部属性", "按用户名/邮箱", "按文件名", "按归属", "按文件权限"])
         self.filter_target_combo.currentTextChanged.connect(self._apply_filter)
         filter_row.addWidget(self.filter_target_combo)
 
@@ -431,12 +502,13 @@ class DriveFolderWidget(QWidget):
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         self.progress.setRange(0, 0)  # 不确定进度模式
-        self.progress.setMaximumWidth(200)
-        bottom.addWidget(self.progress)
+        
+        from PySide6.QtWidgets import QSizePolicy
+        self.progress.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        bottom.addWidget(self.progress, 1)
 
         self.status_label = QLabel("请输入文件夹链接并点击加载")
         bottom.addWidget(self.status_label)
-        bottom.addStretch()
 
         self.file_count_label = QLabel("")
         bottom.addWidget(self.file_count_label)
@@ -526,6 +598,7 @@ class DriveFolderWidget(QWidget):
         self.refresh_btn.setEnabled(False)
         self.back_btn.setEnabled(False)
         self.table.setRowCount(0)
+        self._files_cache = []
 
         self._worker = DriveFolderFetchWorker(
             folder_id, 
@@ -534,12 +607,41 @@ class DriveFolderWidget(QWidget):
             supported_mime_types=self._get_supported_mime_types()
         )
         self._worker.progress.connect(lambda msg: self.status_label.setText(msg))
+        self._worker.batch_ready.connect(self._on_batch_ready)
         self._worker.finished.connect(self._on_files_loaded)
         self._worker.error.connect(self._on_load_error)
         # 确保线程执行完毕后安全释放资源，防止僵尸线程导致 C++ 底层崩溃
         self._worker.finished.connect(self._worker.deleteLater)
         self._worker.error.connect(lambda msg: self._worker.deleteLater())
         self._worker.start()
+
+    def _on_batch_ready(self, files_chunk):
+        """流式处理返回的文件批次"""
+        if not files_chunk: return
+        self._files_cache.extend(files_chunk)
+        
+        keyword = self.filter_input.text().strip()
+        mode = self.filter_mode.currentText()
+        target = self.filter_target_combo.currentText()
+
+        if keyword:
+            filtered = [
+                f for f in files_chunk
+                if file_matches_filter(f, keyword, mode, target)
+            ]
+        else:
+            filtered = files_chunk
+
+        self._append_to_table(filtered)
+        
+        total = len(self._files_cache)
+        shown = self.table.rowCount()
+        scrollbar = self.table.verticalScrollBar()
+        is_at_bottom = scrollbar.value() >= scrollbar.maximum() - 2 
+        if is_at_bottom:
+            self.table.scrollToBottom()
+        
+        self.file_count_label.setText(f"共 {shown}/{total} 个文件" if keyword else f"共 {total} 个文件")
 
     def _on_files_loaded(self, folder_id, files):
         """文件列表加载完成"""
@@ -548,12 +650,13 @@ class DriveFolderWidget(QWidget):
         self.load_btn.setEnabled(True)
         self.refresh_btn.setEnabled(True)
         self._worker = None
-        self._files_cache = files
 
         self._update_breadcrumb()
-        self._apply_filter()  # 渲染表格（通过过滤逻辑统一处理）
+        # 这里不需要再全量渲染一次，因为流式输出已经实时渲染了
+        # 但我们为了最终状态准确，可以刷新一下过滤条件及状态栏
+        self._apply_filter() 
 
-        if not files:
+        if not self._files_cache:
             self.status_label.setText("📭 文件夹为空或无访问权限")
             self.file_count_label.setText("")
 
@@ -586,7 +689,8 @@ class DriveFolderWidget(QWidget):
         else:
             filtered = self._files_cache
 
-        self._populate_table(filtered)
+        self.table.setRowCount(0)
+        self._append_to_table(filtered)
 
         # 更新状态
         total = len(self._files_cache)
@@ -596,7 +700,7 @@ class DriveFolderWidget(QWidget):
                 f"🔍 过滤结果: 显示 {shown}/{total} 个文件 "
                 f"(模式: {mode}, 关键词: \"{keyword}\")"
             )
-        elif total > 0:
+        elif not self._worker or not self._worker.isRunning():
             self.status_label.setText("✅ 加载完成")
         self.file_count_label.setText(f"共 {shown}/{total} 个文件" if keyword else f"共 {total} 个文件")
 
@@ -609,10 +713,8 @@ class DriveFolderWidget(QWidget):
     # 表格渲染
     # ========================
 
-    def _populate_table(self, files):
+    def _append_to_table(self, files):
         """将文件列表渲染到表格中"""
-        self.table.setRowCount(0)
-
         if not files:
             return
 
