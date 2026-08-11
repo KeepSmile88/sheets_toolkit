@@ -141,8 +141,8 @@ class PermissionActionWorker(QThread):
             class RequestCollector:
                 def __init__(self):
                     self.requests = []
-                def add(self, req, request_id=None):
-                    self.requests.append((req, request_id))
+                def add(self, req, request_id=None, **kwargs):
+                    self.requests.append((req, request_id, kwargs))
                     
             collector = RequestCollector()
 
@@ -193,14 +193,27 @@ class PermissionActionWorker(QThread):
                 
             auth = AuthManager()
             success_count = 0
+            request_metadata = {}
             
             def batch_callback(request_id, response, exception):
                 nonlocal success_count
                 if exception:
                     if 'cannotDeletePermission' in str(exception):
+                        meta = request_metadata.get(request_id, {})
                         sid = request_id.split('_')[0] if request_id else ""
-                        link = f"https://docs.google.com/spreadsheets/d/{sid}/edit"
-                        logger.warning(f"跳过不可直接删除的继承权限，请前往父级目录修改: {link}")
+                        email = meta.get('email')
+                        is_recursive = meta.get('recursive', False)
+                        
+                        if is_recursive and email and sid:
+                            logger.info(f"权限 {email} 继承自父级，开始回调执行递归清理...")
+                            try:
+                                SheetService(sid).remove_permission_recursively(sid, email)
+                                success_count += 1
+                            except Exception as re_err:
+                                logger.error(f"递归清理父级权限失败 [{sid}]: {re_err}")
+                        else:
+                            link = f"https://docs.google.com/spreadsheets/d/{sid}/edit"
+                            logger.warning(f"跳过不可直接删除的继承权限，请前往父级目录修改: {link}")
                     else:
                         logger.error(f"批量请求中单个操作失败: {exception}")
                 else:
@@ -212,8 +225,9 @@ class PermissionActionWorker(QThread):
                 self.progress.emit(start_idx, total_requests, f"批量发送中... ({start_idx+1}-{start_idx+len(chunk)}/{total_requests})")
                 
                 batch_req = auth.create_batch_request(callback=batch_callback)
-                for idx, (req, sid) in enumerate(chunk):
+                for idx, (req, sid, meta) in enumerate(chunk):
                     unique_req_id = f"{sid}_{idx}" if sid else str(idx)
+                    request_metadata[unique_req_id] = meta
                     batch_req.add(req, request_id=unique_req_id)
                     
                 try:

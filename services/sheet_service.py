@@ -1130,7 +1130,7 @@ class SheetService:
                     fileId=self.spreadsheet_id, permissionId=p["id"]
                 )
                 if batch is not None:
-                    batch.add(req, request_id=self.spreadsheet_id)
+                    batch.add(req, request_id=self.spreadsheet_id, email=p.get("emailAddress"), recursive=recursive)
                     removed += 1
                     continue
                     
@@ -1211,7 +1211,7 @@ class SheetService:
                         fileId=self.spreadsheet_id, permissionId=p["id"]
                     )
                     if batch is not None:
-                        batch.add(req, request_id=self.spreadsheet_id)
+                        batch.add(req, request_id=self.spreadsheet_id, email=email, recursive=recursive_remove)
                         continue
                         
                     try:
@@ -1294,7 +1294,7 @@ class SheetService:
             permissionId=permission_id
         )
         if batch is not None:
-            batch.add(req, request_id=self.spreadsheet_id)
+            batch.add(req, request_id=self.spreadsheet_id, email=email, recursive=recursive)
             return None
             
         try:
