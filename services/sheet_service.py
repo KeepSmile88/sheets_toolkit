@@ -1014,7 +1014,7 @@ class SheetService:
             fileId=self.spreadsheet_id, body=body, fields='id'
         )
         if batch is not None:
-            batch.add(req)
+            batch.add(req, request_id=self.spreadsheet_id)
             return None
             
         result = req.execute()
@@ -1045,7 +1045,7 @@ class SheetService:
             fields="id, copyRequiresWriterPermission"
         )
         if batch is not None:
-            batch.add(req)
+            batch.add(req, request_id=self.spreadsheet_id)
             return None
             
         res = req.execute()
@@ -1069,7 +1069,7 @@ class SheetService:
             fields="id, writersCanShare"
         )
         if batch is not None:
-            batch.add(req)
+            batch.add(req, request_id=self.spreadsheet_id)
             return None
             
         res = req.execute()
@@ -1130,7 +1130,7 @@ class SheetService:
                     fileId=self.spreadsheet_id, permissionId=p["id"]
                 )
                 if batch is not None:
-                    batch.add(req)
+                    batch.add(req, request_id=self.spreadsheet_id)
                     removed += 1
                     continue
                     
@@ -1173,7 +1173,7 @@ class SheetService:
                     fileId=self.spreadsheet_id, permissionId=p["id"]
                 )
                 if batch is not None:
-                    batch.add(req)
+                    batch.add(req, request_id=self.spreadsheet_id)
                     removed += 1
                     continue
                     
@@ -1211,7 +1211,7 @@ class SheetService:
                         fileId=self.spreadsheet_id, permissionId=p["id"]
                     )
                     if batch is not None:
-                        batch.add(req)
+                        batch.add(req, request_id=self.spreadsheet_id)
                         continue
                         
                     try:
@@ -1271,7 +1271,7 @@ class SheetService:
             fields="id,role,emailAddress"
         )
         if batch is not None:
-            batch.add(req)
+            batch.add(req, request_id=self.spreadsheet_id)
             return None
             
         result = req.execute()
@@ -1294,7 +1294,7 @@ class SheetService:
             permissionId=permission_id
         )
         if batch is not None:
-            batch.add(req)
+            batch.add(req, request_id=self.spreadsheet_id)
             return None
             
         try:
@@ -1333,7 +1333,7 @@ class SheetService:
             fields="id,role,emailAddress"
         )
         if batch is not None:
-            batch.add(req)
+            batch.add(req, request_id=self.spreadsheet_id)
             return None
             
         result = req.execute()
