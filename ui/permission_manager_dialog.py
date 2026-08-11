@@ -200,7 +200,7 @@ class PermissionActionWorker(QThread):
                 if exception:
                     if 'cannotDeletePermission' in str(exception):
                         meta = request_metadata.get(request_id, {})
-                        sid = request_id.split('_')[0] if request_id else ""
+                        sid = request_id.rsplit('_', 1)[0] if request_id and '_' in request_id else ""
                         email = meta.get('email')
                         is_recursive = meta.get('recursive', False)
                         
@@ -212,7 +212,7 @@ class PermissionActionWorker(QThread):
                             except Exception as re_err:
                                 logger.error(f"递归清理父级权限失败 [{sid}]: {re_err}")
                         else:
-                            link = f"https://docs.google.com/spreadsheets/d/{sid}/edit"
+                            link = f"https://drive.google.com/open?id={sid}"
                             logger.warning(f"跳过不可直接删除的继承权限，请前往父级目录修改: {link}")
                     else:
                         logger.error(f"批量请求中单个操作失败: {exception}")
